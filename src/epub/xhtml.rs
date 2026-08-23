@@ -6,6 +6,7 @@
 //! rest carry genuinely broken markup, such as `<strong><code></strong></code>`,
 //! which no XML parser can accept. Those are reported to the caller.
 
+use super::mathml;
 use crate::doc::{Block, BlockKind, Link, RunBuilder, RunStyle};
 use anyhow::{Context, Result};
 use roxmltree::{Document, Node, ParsingOptions};
@@ -284,6 +285,18 @@ impl Walker {
                 self.push_preformatted(node, style);
                 return;
             }
+            "math" => {
+                self.push_math(node, style);
+                return;
+            }
+            "sub" | "sup" => {
+                // A marker that carries a link is left to the normal walk, so
+                // the link survives. Everything else is set as an index.
+                if let Some(text) = mathml::script_text(node, name == "sub") {
+                    self.current.push(&text, style);
+                    return;
+                }
+            }
             _ => {}
         }
 
@@ -329,6 +342,24 @@ impl Walker {
             // Unknown element: keep its text, do not open a block.
             None => self.walk_children(node, style),
         }
+    }
+
+    /// Writes a formula. A displayed one gets a block of its own, the way the
+    /// book sets it off from the prose; an inline one joins the running text.
+    fn push_math(&mut self, node: Node, style: RunStyle) {
+        let text = mathml::render(node);
+        if text.is_empty() {
+            return;
+        }
+        // Inside a listing the formula is part of the code and must not break
+        // the line it stands on.
+        if node.attribute("display") == Some("block") && self.code_depth == 0 {
+            self.open(BlockKind::Paragraph);
+            self.current.push(&text, style);
+            self.flush();
+            return;
+        }
+        self.current.push(&text, style);
     }
 
     fn push_image(&mut self, node: Node) {
@@ -432,7 +463,7 @@ fn start_ordinal(node: Node) -> usize {
         .unwrap_or(1)
 }
 
-fn collect_raw_text(node: Node) -> String {
+pub(super) fn collect_raw_text(node: Node) -> String {
     let mut out = String::new();
     for descendant in node.descendants() {
         if descendant.is_text() {
@@ -460,7 +491,7 @@ fn strip_invisibles(text: &str) -> String {
 ///
 /// Only ASCII whitespace collapses. A no-break space is content: it must stay a
 /// distinct character so the line breaker does not split there.
-fn collapse_whitespace(text: &str) -> String {
+pub(super) fn collapse_whitespace(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_space = false;
     for ch in strip_invisibles(text).chars() {
@@ -625,5 +656,47 @@ mod tests {
         .unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].plain_text(), "text");
+    }
+
+    #[test]
+    fn gives_a_displayed_formula_a_block_of_its_own() {
+        let blocks = parse(
+            r#"<html><body><p>before</p><div class="disp-formulau">
+               <math xmlns="http://www.w3.org/1998/Math/MathML" display="block">
+                 <msub><mi>R</mi><mi>s</mi></msub><mo>=</mo><msub><mi>R</mi><mn>1</mn></msub>
+               </math></div><p>after</p></body></html>"#,
+        )
+        .unwrap();
+        let text: Vec<String> = blocks.iter().map(|b| b.plain_text()).collect();
+        assert_eq!(text, vec!["before", "Rₛ = R₁", "after"]);
+    }
+
+    #[test]
+    fn keeps_an_inline_formula_in_the_running_text() {
+        let blocks = parse(
+            r#"<html><body><p>a <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mfrac><mn>5</mn><mn>16</mn></mfrac></math> bolt</p></body></html>"#,
+        )
+        .unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].plain_text(), "a 5/16 bolt");
+    }
+
+    #[test]
+    fn sets_an_index_from_prose_as_one() {
+        let blocks =
+            parse("<html><body><p>R<sub>s</sub> and x<sup>2</sup></p></body></html>").unwrap();
+        assert_eq!(blocks[0].plain_text(), "Rₛ and x²");
+    }
+
+    #[test]
+    fn leaves_a_footnote_marker_a_link() {
+        let parsed = parse_in(
+            r#"<html><body><p>text<sup><a href="notes.xhtml#n1">1</a></sup></p></body></html>"#,
+            "",
+        )
+        .unwrap();
+        assert_eq!(parsed.blocks[0].plain_text(), "text1");
+        assert_eq!(parsed.links.len(), 1);
+        assert_eq!(parsed.links[0].target, "notes.xhtml#n1");
     }
 }

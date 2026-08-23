@@ -1,5 +1,6 @@
 //! Reading EPUB containers: package document, spine and navigation.
 
+pub mod mathml;
 pub mod xhtml;
 
 use crate::doc::Chapter;

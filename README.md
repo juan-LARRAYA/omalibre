@@ -234,6 +234,20 @@ Inside tmux, pictures always use the coarse mode. That is not a shortcoming of
 your terminal: tmux manages the screen itself and would leave pictures behind
 when you scroll.
 
+## Formulas
+
+Technical books carry their mathematics as MathML, and a terminal has no way to
+stack one part of a formula over another. Omalibre sets it on one line instead.
+Indices become real characters wherever there is one, so `(Q_a)^n` arrives as
+`(Qₐ)ⁿ` rather than as `(Qa)n`, where the exponent would read as part of the
+number.
+
+![A formula in the text](docs/screenshots/mathml.png)
+
+Where a character has no raised or lowered form, the index is written out:
+`e^(−λt)`. That is longer, but it never hides which part is the index. The same
+goes for a subscript in running prose, so `R<sub>s</sub>` reads as `Rₛ`.
+
 ## Keep your place across machines
 
 Reading positions and notes live in one directory. Point it at a synchronised
