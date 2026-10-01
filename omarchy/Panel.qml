@@ -68,6 +68,12 @@ Panel {
   // copies exactly what the label reads.
   readonly property string scanCommand: "omalibre --scan ~/Books"
 
+  // --recent answers "read last", not "in the library": a freshly scanned
+  // book with no reading position yet leaves it empty too. -1 means this
+  // has not come back yet, and is treated as "assume empty" the way the
+  // panel always has, rather than flashing a wrong message first.
+  property int libraryTotal: -1
+
   readonly property bool searching: root.runningQuery.trim() !== ""
   readonly property int limit: root.searching ? root.matchCount : root.recentCount
   readonly property var shownBooks: root.books.slice(0, root.limit)
@@ -100,6 +106,26 @@ Panel {
 
   function refresh() {
     root.requestBooks(root.wantedQuery)
+    root.checkLibraryTotal()
+  }
+
+  // Answers the question --recent can't: whether the library holds any book
+  // at all, scanned but unread included. Local and JSON-only, so this stays
+  // cheap enough to run every time the panel opens.
+  function checkLibraryTotal() {
+    if (libraryCheckProcess.running) return
+    libraryCheckProcess.running = true
+  }
+
+  function takeLibraryTotal(raw) {
+    var text = (raw || "").trim()
+    if (text === "NOT_INSTALLED" || text === "") return
+    try {
+      var parsed = JSON.parse(text)
+      root.libraryTotal = Array.isArray(parsed) ? parsed.length : -1
+    } catch (error) {
+      // Leave the last known total rather than guess from unparsable output.
+    }
   }
 
   function takeBooks(raw) {
@@ -216,10 +242,14 @@ Panel {
       searchField.text = ""
       root.requestBooks("")
       root.checkForUpdate()
+      root.checkLibraryTotal()
     }
   }
 
-  Component.onCompleted: root.requestBooks("")
+  Component.onCompleted: {
+    root.requestBooks("")
+    root.checkLibraryTotal()
+  }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -242,6 +272,15 @@ Panel {
 
   Process {
     id: openProcess
+  }
+
+  Process {
+    id: libraryCheckProcess
+    command: [root.runner, "--list", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.takeLibraryTotal(text)
+    }
   }
 
   Process {
@@ -458,9 +497,41 @@ Panel {
           wrapMode: Text.WordWrap
         }
 
+        // The library holds books, just none read yet: the fix is to open
+        // one, not to scan a directory that has already been scanned.
         RowLayout {
           visible: !root.notInstalled && root.failure === "" && root.books.length === 0
-            && !root.searching
+            && !root.searching && root.libraryTotal > 0
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          Text {
+            Layout.fillWidth: true
+            text: (root.libraryTotal === 1 ? "1 book" : root.libraryTotal + " books")
+              + " in your library, none read yet."
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+
+          Button {
+            text: "Library"
+            foreground: root.fg
+            tooltipText: "Open the whole library"
+            fontFamily: root.fontFamily
+            fontSize: Style.font.caption
+            horizontalPadding: Style.spacing.controlPaddingX
+            verticalPadding: Style.spacing.controlPaddingY
+            onClicked: root.openLibrary()
+          }
+        }
+
+        // Nothing scanned in yet, or the check above has not answered: the
+        // same safe default the panel always showed here.
+        RowLayout {
+          visible: !root.notInstalled && root.failure === "" && root.books.length === 0
+            && !root.searching && root.libraryTotal <= 0
           Layout.fillWidth: true
           spacing: Style.space(8)
 
